@@ -390,3 +390,36 @@ details.guide p { color: var(--text-2); font-size: 14.5px; margin: 10px 0 0; }
 @media (min-width: 640px) {
   #view { padding-left: 24px; padding-right: 24px; }
 }
+
+/* ---------- Version 1.1 : objectifs, budgets, Apple Pay ---------- */
+
+.goal { display: flex; align-items: center; gap: 16px; margin-bottom: 10px; }
+.goal-ring { width: 68px; height: 68px; position: relative; flex: none; }
+.goal-ring svg { width: 100%; height: 100%; }
+.goal-ring span { position: absolute; inset: 0; display: grid; place-items: center; font-size: 14px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.goal-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.goal-main .name { font-weight: 600; font-size: 17px; }
+.goal-main .amt { font-weight: 650; font-size: 16px; }
+.goal-main .amt .muted { font-weight: 400; }
+.goal-month { margin-top: 4px; font-size: 12.5px; font-weight: 600; color: var(--accent); }
+.goal-month.ok { color: var(--pos); }
+
+.budget-row { align-items: flex-start; padding-top: 13px; padding-bottom: 13px; }
+.budget-row .progress { margin-top: 8px; }
+.budget-row .row-amount { padding-top: 2px; }
+.cat-bar { display: block; }
+.delta.neg, .row-sub.neg { color: var(--neg); }
+
+.banner.neutral { background: var(--card); box-shadow: var(--shadow); width: 100%; text-align: left; }
+
+.wallet-item { display: flex; align-items: flex-start; gap: 12px; padding: 12px 14px; position: relative; }
+.wallet-item + .wallet-item::before { content: ""; position: absolute; top: 0; left: 50px; right: 0; border-top: 0.5px solid var(--sep); }
+.wallet-item .row-main { gap: 2px; }
+.wallet-item .row-amount { padding-top: 1px; }
+.input.input-sm { height: 34px; font-size: 14px; margin-top: 6px; border-radius: 8px; max-width: 240px; }
+.check { position: relative; width: 24px; height: 24px; flex: none; margin-top: 2px; }
+.check input { position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0; }
+.check span { position: absolute; inset: 0; border-radius: 50%; border: 1.5px solid var(--text-3); transition: all .15s; }
+.check input:checked + span { background: var(--accent); border-color: var(--accent); }
+.check input:checked + span::after { content: ""; position: absolute; left: 7.5px; top: 3.5px; width: 5px; height: 10px; border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(45deg); }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; background: var(--fill); padding: 1px 5px; border-radius: 5px; color: var(--text); }

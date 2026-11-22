@@ -35,6 +35,7 @@
   ];
 
   const PAYMENT_METHODS = [
+    { id: 'applepay', name: 'Apple Pay' },
     { id: 'cb', name: 'Carte bancaire' },
     { id: 'prelevement', name: 'Prélèvement' },
     { id: 'virement', name: 'Virement' },
@@ -51,6 +52,7 @@
     { id: 'perso', name: 'Épargne personnelle' },
     { id: 'assuranceVie', name: 'Assurance vie' },
     { id: 'pea', name: 'PEA' },
+    { id: 'projet', name: 'Projet / objectif' },
     { id: 'autre', name: 'Autre placement' }
   ];
 
@@ -180,7 +182,10 @@
       credits: [],
       subscriptions: [],
       savingsAccounts: [],
-      skips: {}
+      skips: {},
+      budgets: {},
+      merchantRules: {},
+      importedKeys: {}
     };
   }
 
@@ -204,6 +209,7 @@
       openingBalance: isInt(s.openingBalance) ? s.openingBalance : 0,
       onboarded: s.onboarded !== false,
       lastExport: typeof s.lastExport === 'string' ? s.lastExport : null,
+      lastWalletImport: typeof s.lastWalletImport === 'string' ? s.lastWalletImport : null,
       createdAt: typeof s.createdAt === 'string' ? s.createdAt : base.settings.createdAt
     };
 
@@ -223,7 +229,8 @@
       id: a.id, name: str(a.name, 60).trim(),
       kind: SAVINGS_KINDS.some((k) => k.id === a.kind) ? a.kind : 'autre',
       initialBalance: isInt(a.initialBalance) ? a.initialBalance : 0,
-      goal: isInt(a.goal) && a.goal > 0 ? a.goal : null
+      goal: isInt(a.goal) && a.goal > 0 ? a.goal : null,
+      targetDate: isValidISODate(a.targetDate) ? a.targetDate : null
     }));
     const accIds = new Set(base.savingsAccounts.map((a) => a.id));
 
@@ -272,6 +279,8 @@
         o.payment = PAYMENT_METHODS.some((p) => p.id === t.payment) ? t.payment : '';
         if (typeof t.creditId === 'string') o.creditId = t.creditId;
         if (typeof t.subscriptionId === 'string') o.subscriptionId = t.subscriptionId;
+        if (typeof t.merchant === 'string' && t.merchant.trim()) o.merchant = str(t.merchant, 120);
+        if (t.imported === true) o.imported = true;
       } else if (t.type === 'income') {
         o.source = INCOME_SOURCES.some((x) => x.id === t.source) ? t.source : 'autres';
         if (typeof t.recurringId === 'string') o.recurringId = t.recurringId;
@@ -285,6 +294,18 @@
     base.skips = {};
     if (obj.skips && typeof obj.skips === 'object') {
       for (const k of Object.keys(obj.skips)) if (obj.skips[k] === true) base.skips[k] = true;
+    }
+    base.budgets = {};
+    if (obj.budgets && typeof obj.budgets === 'object') {
+      for (const k of Object.keys(obj.budgets)) if (catIds.has(k) && isInt(obj.budgets[k]) && obj.budgets[k] > 0) base.budgets[k] = obj.budgets[k];
+    }
+    base.merchantRules = {};
+    if (obj.merchantRules && typeof obj.merchantRules === 'object') {
+      for (const k of Object.keys(obj.merchantRules)) if (k && catIds.has(obj.merchantRules[k])) base.merchantRules[k] = obj.merchantRules[k];
+    }
+    base.importedKeys = {};
+    if (obj.importedKeys && typeof obj.importedKeys === 'object') {
+      for (const k of Object.keys(obj.importedKeys)) if (obj.importedKeys[k] === true) base.importedKeys[k] = true;
     }
     return base;
   }
@@ -429,6 +450,181 @@
     return accountBalance(state) + p.income - p.charges;
   }
 
+  /* ---------- Objectifs d'épargne ---------- */
+
+  function monthDiff(fromYM, toYM) {
+    const [a, b] = fromYM.split('-').map(Number);
+    const [c, d] = toYM.split('-').map(Number);
+    return (c - a) * 12 + (d - b);
+  }
+
+  /** Mouvement net d'un compte d'épargne sur un mois (versements + intérêts − retraits). */
+  function savingsNetInMonth(state, accountId, ym) {
+    let n = 0;
+    for (const t of state.transactions) {
+      if (t.type !== 'saving' || t.accountId !== accountId || !inMonth(t, ym)) continue;
+      n += t.direction === 'out' ? -t.amount : t.amount;
+    }
+    return n;
+  }
+
+  /**
+   * Plan d'un objectif : progression, montant restant, et versement mensuel nécessaire
+   * pour atteindre l'objectif à la date visée (le mois en cours compte comme un mois de versement).
+   */
+  function goalPlan(state, acc, todayISO) {
+    if (!acc || !acc.goal) return null;
+    const balance = savingsBalance(state, acc.id);
+    const remaining = Math.max(0, acc.goal - balance);
+    const ym = monthOf(todayISO);
+    const thisMonth = savingsNetInMonth(state, acc.id, ym);
+    const plan = { balance, goal: acc.goal, remaining, progress: goalProgress(balance, acc.goal), reached: remaining === 0, thisMonth, perMonth: null, thisMonthLeft: null, months: null, late: false };
+    if (acc.targetDate && !plan.reached) {
+      if (acc.targetDate < todayISO) {
+        plan.late = true;
+      } else {
+        plan.months = monthDiff(ym, monthOf(acc.targetDate)) + 1;
+        const atMonthStart = remaining + Math.max(0, thisMonth);
+        plan.perMonth = Math.ceil(atMonthStart / plan.months);
+        plan.thisMonthLeft = Math.max(0, Math.min(remaining, plan.perMonth - Math.max(0, thisMonth)));
+      }
+    }
+    return plan;
+  }
+
+  /* ---------- Budgets par catégorie ---------- */
+
+  function budgetStatus(ratio) {
+    return ratio > 1 ? 'over' : ratio >= 0.8 ? 'warn' : 'ok';
+  }
+
+  function categoryBudgets(state, ym) {
+    const spent = new Map(expensesByCategory(state, ym).map((c) => [c.categoryId, c.total]));
+    const out = [];
+    for (const categoryId of Object.keys(state.budgets || {})) {
+      const limit = state.budgets[categoryId];
+      if (!(limit > 0) || !state.categories.some((c) => c.id === categoryId)) continue;
+      const s = spent.get(categoryId) || 0;
+      const ratio = s / limit;
+      out.push({ categoryId, limit, spent: s, ratio, left: limit - s, status: budgetStatus(ratio) });
+    }
+    return out.sort((a, b) => b.ratio - a.ratio);
+  }
+
+  /* ---------- Paiements Apple Pay (fichier alimenté par un raccourci iPhone) ---------- */
+
+  const stripAccents = (s) => s.normalize('NFD').replace(/[̀-ͯ]/g, '');
+
+  function normMerchant(s) {
+    return stripAccents(String(s || '').toLowerCase()).replace(/[^a-z0-9&.' ]+/g, ' ').replace(/\s+/g, ' ').trim();
+  }
+
+  // Ordre important : « uber eats » avant « uber », « amazon prime » avant « amazon »,
+  // « boulangerie » avant « boulanger », « fnac spectacles » avant « fnac ».
+  const MERCHANT_RULES = [
+    ['abonnements', ['netflix', 'spotify', 'deezer', 'disney', 'canal+', 'canal plus', 'mycanal', 'apple.com', 'itunes', 'icloud', 'apple music', 'apple tv', 'amazon prime', 'prime video', 'youtube', 'google one', 'google storage', 'playstation plus', 'ps plus', 'game pass', 'xbox live', 'crunchyroll', 'molotov', 'paramount', 'max ', 'dazn', 'audible', 'kindle unlimited', 'chatgpt', 'openai', 'claude.ai', 'anthropic', 'nintendo online']],
+    ['restaurants', ['uber eats', 'ubereats', 'deliveroo', 'just eat', 'mcdonald', 'mc donald', 'mcdo', 'burger king', 'kfc', 'quick', 'subway', 'domino', 'pizza', 'sushi', 'kebab', 'tacos', "o'tacos", 'otacos', 'five guys', 'restaurant', 'resto', 'brasserie', 'bistro', 'cafe', 'starbucks', 'columbus', 'paul', 'brioche doree', 'la mie caline', 'pret a manger', 'poke', 'snack', 'crous', 'cantine', 'self']],
+    ['courses', ['carrefour', 'leclerc', 'lidl', 'aldi', 'auchan', 'intermarche', 'super u', 'hyper u', 'u express', 'systeme u', 'casino', 'monoprix', 'monop', 'franprix', 'netto', 'leader price', 'grand frais', 'picard', 'biocoop', 'spar', 'cora', 'colruyt', 'naturalia', 'la vie claire', 'boulangerie', 'patisserie', 'boucherie', 'primeur', 'epicerie', 'supermarche', 'hypermarche', 'drive', 'g20', 'proxi', 'vival', 'thiriet']],
+    ['transport', ['totalenergies', 'total access', 'total', 'esso', 'shell', 'bp', 'avia', 'agip', 'station', 'carburant', 'sncf', 'ouigo', 'tgv', 'ter ', 'ratp', 'navigo', 'tcl', 'tisseo', 'rtm', 'tbm', 'star ', 'transdev', 'keolis', 'uber', 'bolt', 'heetch', 'free now', 'taxi', 'g7', 'blablacar', 'flixbus', 'peage', 'autoroute', 'vinci', 'sanef', 'aprr', 'asf', 'parking', 'indigo', 'effia', 'saemes', 'lime', 'dott', 'tier', 'velib', 'norauto', 'feu vert', 'speedy', 'midas', 'point s', 'controle technique']],
+    ['factures', ['edf', 'engie', 'veolia', 'suez', 'saur', 'free mobile', 'free', 'orange', 'sosh', 'sfr', 'red by sfr', 'bouygues', 'b&you', 'la poste mobile', 'syma', 'prixtel', 'youprice', 'eau ', 'gaz', 'electricite', 'ekwateur', 'mint energie', 'ohm energie', 'axa', 'maif', 'macif', 'matmut', 'groupama', 'allianz', 'assurance']],
+    ['sante', ['pharmacie', 'pharma', 'parapharmacie', 'doctolib', 'medecin', 'docteur', 'dr ', 'dentiste', 'kine', 'osteo', 'opticien', 'optique', 'krys', 'afflelou', 'optic 2000', 'general d optique', 'laboratoire', 'labo', 'biologie', 'hopital', 'clinique', 'mutuelle']],
+    ['loisirs', ['fnac spectacles', 'ticketmaster', 'cinema', 'pathe', 'ugc', 'cgr', 'mk2', 'gaumont', 'kinepolis', 'megarama', 'steam', 'playstation', 'nintendo', 'xbox', 'epic games', 'riot', 'blizzard', 'bowling', 'karting', 'laser', 'escape', 'basic fit', 'basic-fit', 'fitness', 'keep cool', 'on air', 'salle de sport', 'piscine', 'musee', 'concert', 'festival', 'parc', 'bar', 'pub', 'club', 'billetterie', 'vapiano']],
+    ['shopping', ['amazon', 'amzn', 'cdiscount', 'zalando', 'shein', 'temu', 'aliexpress', 'vinted', 'ebay', 'zara', 'h&m', 'hm ', 'primark', 'kiabi', 'uniqlo', 'celio', 'jules', 'bershka', 'pull and bear', 'pull&bear', 'stradivarius', 'mango', 'jd sports', 'foot locker', 'courir', 'nike', 'adidas', 'decathlon', 'intersport', 'go sport', 'fnac', 'darty', 'boulanger', 'apple store', 'micromania', 'ikea', 'leroy merlin', 'castorama', 'brico', 'action', 'gifi', 'la foir', 'sephora', 'nocibe', 'marionnaud', 'yves rocher', 'normal', 'hema', 'maisons du monde', 'but ', 'conforama', 'cultura', 'joue club', 'king jouet']],
+    ['logement', ['loyer', 'foncia', 'nexity', 'citya', 'orpi', 'century 21', 'syndic', 'crous loyer']]
+  ];
+
+  const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const ruleCache = new Map();
+  function keywordMatch(norm, kw) {
+    let re = ruleCache.get(kw);
+    if (!re) {
+      const k = kw.trim();
+      // mots courts : mot entier ; mots longs : début de mot
+      re = new RegExp('(^|[^a-z0-9])' + escapeRe(k) + (k.length <= 3 ? '([^a-z0-9]|$)' : ''));
+      ruleCache.set(kw, re);
+    }
+    return re.test(norm);
+  }
+
+  /** Catégorie proposée pour un commerçant : règle apprise, puis mots-clés, sinon « Autres ». */
+  function categorizeMerchant(state, merchant) {
+    const n = normMerchant(merchant);
+    const exists = (id) => state.categories.some((c) => c.id === id);
+    if (!n) return 'autres';
+    const learned = (state.merchantRules || {})[n];
+    if (learned && exists(learned)) return learned;
+    for (const [cat, kws] of MERCHANT_RULES) {
+      if (kws.some((k) => keywordMatch(n, k))) return exists(cat) ? cat : 'autres';
+    }
+    return 'autres';
+  }
+
+  function parseWalletDate(s) {
+    const t = String(s || '').trim();
+    let m = t.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+    if (m) {
+      const iso = m[1] + '-' + pad(+m[2]) + '-' + pad(+m[3]);
+      return isValidISODate(iso) ? iso : null;
+    }
+    m = t.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2,4})/);
+    if (m) {
+      let y = +m[3];
+      if (y < 100) y += 2000;
+      const iso = y + '-' + pad(+m[2]) + '-' + pad(+m[1]);
+      return isValidISODate(iso) ? iso : null;
+    }
+    return null;
+  }
+
+  function parseWalletAmount(s) {
+    const t = String(s || '').replace(/[^\d,.]/g, '');
+    return t ? parseAmount(t) : null;
+  }
+
+  /**
+   * Lit le fichier des paiements (une ligne par paiement : « date;montant;commerçant »).
+   * Chaque ligne reçoit une clé stable pour ne jamais importer deux fois le même paiement.
+   */
+  function parseWalletText(text) {
+    const items = [];
+    const counts = {};
+    let invalid = 0;
+    for (const line of String(text || '').replace(/^﻿/, '').split(/\r?\n|\r/)) {
+      const raw = line.trim();
+      if (!raw) continue;
+      const parts = raw.split(';');
+      const date = parseWalletDate(parts[0]);
+      const amount = parts.length >= 2 ? parseWalletAmount(parts[1]) : null;
+      if (!date || !amount) { invalid++; continue; }
+      const merchant = parts.slice(2).join(';').trim();
+      const base = date + '|' + amount + '|' + normMerchant(merchant);
+      counts[base] = (counts[base] || 0) + 1;
+      items.push({ key: base + '|' + counts[base], date, amount, merchant: merchant || 'Paiement Apple Pay' });
+    }
+    return { items, invalid };
+  }
+
+  /** Prépare l'import : nouveaux paiements seulement, catégorie proposée, doublons possibles signalés. */
+  function prepareWalletImport(state, text) {
+    const { items, invalid } = parseWalletText(text);
+    const known = state.importedKeys || {};
+    const fresh = items.filter((it) => !known[it.key]);
+    const prepared = fresh.map((it) => {
+      const categoryId = categorizeMerchant(state, it.merchant);
+      const n = normMerchant(it.merchant);
+      const possibleDuplicate = state.transactions.some((t) => t.type === 'expense' && t.amount === it.amount && t.date === it.date);
+      const sub = state.subscriptions.find((x) => {
+        if (!x.active) return false;
+        const sn = normMerchant(x.name);
+        if (!sn || !(n.includes(sn) || sn.includes(n))) return false;
+        const diff = Math.abs(new Date(x.nextDate) - new Date(it.date)) / 864e5;
+        return diff <= 7;
+      });
+      return { ...it, categoryId: sub ? sub.categoryId : categoryId, possibleDuplicate, subscriptionId: sub ? sub.id : null, selected: !possibleDuplicate };
+    });
+    return { items: prepared, invalid, alreadyImported: items.length - fresh.length };
+  }
+
   /* ---------- Statistiques ---------- */
 
   function monthSummary(state, ym) {
@@ -523,7 +719,9 @@
     creditPaid, creditRemaining, creditProgress, creditPaidInMonth, creditEstimatedEnd, totalCreditsRemaining,
     subscriptionTotals, skipKey, dueItems, pendingTotals, remainingToLive,
     monthSummary, expensesByCategory, monthlySeries, percentChange,
-    sortTransactions, filterTransactions, findDuplicate, firstMonth, toCSV
+    sortTransactions, filterTransactions, findDuplicate, firstMonth, toCSV,
+    monthDiff, savingsNetInMonth, goalPlan, budgetStatus, categoryBudgets,
+    normMerchant, categorizeMerchant, parseWalletDate, parseWalletAmount, parseWalletText, prepareWalletImport
   };
 
   root.BudgetCalc = api;

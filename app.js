@@ -122,7 +122,10 @@
     download: '<path d="M12 4v11M7 10l5 5 5-5M4 20h16"/>',
     upload: '<path d="M12 20V9M7 14l5-5 5 5M4 4h16"/>',
     clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
-    phone: '<rect x="6" y="2.5" width="12" height="19" rx="2.5"/><path d="M11 18.5h2"/>'
+    phone: '<rect x="6" y="2.5" width="12" height="19" rx="2.5"/><path d="M11 18.5h2"/>',
+    target: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.2"/>',
+    gauge: '<path d="M3.5 17a8.5 8.5 0 1 1 17 0"/><path d="m12 17 4-5.5"/>',
+    pay: '<rect x="2.5" y="5" width="19" height="14" rx="2.5"/><path d="M6.5 15h4"/><path d="M15.5 9.5a2.5 2.5 0 1 0 0 5"/>'
   };
   const icon = (name, cls) => `<svg viewBox="0 0 24 24" class="${cls || ''}" aria-hidden="true">${ICONS[name] || ''}</svg>`;
 
@@ -150,7 +153,7 @@
       const c = catById(t.categoryId);
       const credit = t.creditId && state.credits.find((x) => x.id === t.creditId);
       const sub = t.subscriptionId && state.subscriptions.find((x) => x.id === t.subscriptionId);
-      const title = t.note || (credit && credit.name) || (sub && sub.name) || c.name;
+      const title = t.note || t.merchant || (credit && credit.name) || (sub && sub.name) || c.name;
       const extra = [c.name !== title ? c.name : '', paymentName(t.payment)].filter(Boolean).join(' · ');
       return { title, sub: extra || 'Dépense', color: c.color, initial: c.name.charAt(0), sign: '−', cls: '' };
     }
@@ -391,6 +394,21 @@
         <a class="card stat" href="#/credits"><div class="label"><i class="dot" style="--c:#B86B6B"></i>Crédits restants</div><div class="value num">${fmt(C.totalCreditsRemaining(state))}</div></a>
       </div>`;
     html += backupBanner();
+    if (state.settings.lastWalletImport) {
+      html += `<button class="banner neutral" data-action="wallet-import"><span class="avatar" style="--c:var(--text)">${icon('pay')}</span>
+        <span class="row-main"><strong>Importer mes paiements Apple Pay</strong><span class="muted small">Dernier import ${esc(prettyDay(state.settings.lastWalletImport.slice(0, 10)).toLowerCase())}</span></span>${icon('chev', 'chev')}</button>`;
+    }
+
+    const budgets = C.categoryBudgets(state, ym);
+    if (budgets.length) {
+      html += `<div class="section"><div class="section-head"><h2>Budgets du mois</h2><a class="link" href="#/budgets">Tout voir</a></div><div class="card cat-bars">` +
+        budgets.slice(0, 4).map(budgetBar).join('') + `</div></div>`;
+    }
+    const goals = state.savingsAccounts.filter((a) => a.goal);
+    if (goals.length) {
+      html += `<div class="section"><div class="section-head"><h2>Objectifs</h2><a class="link" href="#/goals">Tout voir</a></div>` +
+        goals.slice(0, 2).map(goalCard).join('') + `</div>`;
+    }
 
     if (due.length) {
       html += `<div class="section"><div class="section-head"><h2>À venir ce mois-ci</h2></div><div class="list">` +
@@ -530,7 +548,9 @@
         const cat = catById(c.categoryId);
         const p = prevCats.get(c.categoryId) || 0;
         const ch = C.percentChange(c.total, p);
-        const delta = ch === null ? 'Nouveau ce mois-ci' : ch === 0 ? 'Stable par rapport au mois précédent' : (ch > 0 ? '+' : '') + ch + ' % par rapport à ' + C.monthLabel(prev).split(' ')[0].toLowerCase();
+        let delta = ch === null ? 'Nouveau ce mois-ci' : ch === 0 ? 'Stable par rapport au mois précédent' : (ch > 0 ? '+' : '') + ch + ' % par rapport à ' + C.monthLabel(prev).split(' ')[0].toLowerCase();
+        const lim = (state.budgets || {})[c.categoryId];
+        if (lim) delta += ' · budget ' + fmt(lim) + (c.total > lim ? ' (dépassé)' : '');
         return `<button class="cat-bar" style="text-align:left;width:100%" data-action="goto-ops" data-type="expense" data-cat="${esc(c.categoryId)}" data-month="${ym}">
           <div class="cat-bar-head"><span class="n"><i class="dot" style="--c:${cat.color}"></i><span>${esc(cat.name)}</span></span>
           <span class="a">${fmt(c.total)} <span class="muted" style="font-weight:400">· ${Math.round((c.total / m.expenses) * 100)} %</span></span></div>
@@ -562,6 +582,13 @@
       ['#/subs', 'repeat', '#9585BE', 'Abonnements', subs.count ? fmt(subs.perMonth) + ' / mois' : ''],
       ['#/incomes', 'income', 'var(--pos)', 'Revenus réguliers', state.recurringIncomes.length ? String(state.recurringIncomes.filter((r) => r.active).length) : '']
     ];
+    const goalsCount = state.savingsAccounts.filter((a) => a.goal).length;
+    const budgetsCount = C.categoryBudgets(state, thisMonth()).length;
+    const rows3 = [
+      ['#/goals', 'target', '#5FA3A6', 'Objectifs d’épargne', goalsCount ? String(goalsCount) : ''],
+      ['#/budgets', 'gauge', '#C7915E', 'Budgets par catégorie', budgetsCount ? String(budgetsCount) : ''],
+      ['#/applepay', 'pay', '#636366', 'Paiements Apple Pay', state.settings.lastWalletImport ? 'Importer' : 'Configurer']
+    ];
     const rows2 = [
       ['#/categories', 'tag', '#B8A05A', 'Catégories', String(state.categories.length)],
       ['#/settings', 'gear', '#8E8E93', 'Sauvegarde et réglages', '']
@@ -569,7 +596,7 @@
     const menu = (list) => `<div class="list menu">${list.map(([href, ic, col, label, val]) => `<a class="row" href="${href}">
         <span class="icon-tile" style="--c:${col}">${icon(ic)}</span><span class="row-main"><span class="row-title">${label}</span></span>
         <span class="muted num">${esc(val)}</span>${icon('chev', 'chev')}</a>`).join('')}</div>`;
-    return pageHead('Plus') + menu(rows) + `<div class="section">${menu(rows2)}</div>` +
+    return pageHead('Plus') + menu(rows) + `<div class="section">${menu(rows3)}</div><div class="section">${menu(rows2)}</div>` +
       `<p class="footer-note">Vos données sont enregistrées uniquement sur cet appareil.</p>`;
   }
 
@@ -603,7 +630,8 @@
     const hist = C.sortTransactions(state.transactions.filter((t) => t.type === 'saving' && t.accountId === a.id));
     let html = pageHead(a.name, { back: '#/savings', backLabel: 'Épargne' });
     html += `<div class="card hero"><div class="label">Solde actuel · ${esc(kindName(a.kind))}</div><div class="big num">${fmt(bal)}</div>
-      ${prog !== null ? progressBar(prog) + `<div class="hint">${pct(prog)} de l’objectif de ${fmt(a.goal)}${bal < a.goal ? ' · encore ' + fmt(a.goal - bal) : ' · objectif atteint'}</div>` : '<div class="hint">Aucun objectif défini.</div>'}</div>
+      ${prog !== null ? progressBar(prog) + `<div class="hint">${pct(prog)} de l’objectif de ${fmt(a.goal)}${bal < a.goal ? ' · encore ' + fmt(a.goal - bal) : ' · objectif atteint'}</div>` : '<div class="hint">Aucun objectif défini.</div>'}
+      ${a.goal ? `<div class="hint">${esc(goalLine(C.goalPlan(state, a, today()), a))}</div>` : ''}</div>
       <div class="actions">
         <button class="btn small" data-action="saving-move" data-dir="in" data-id="${esc(a.id)}">Versement</button>
         <button class="btn small" data-action="saving-move" data-dir="out" data-id="${esc(a.id)}">Retrait</button>
@@ -612,6 +640,236 @@
     html += `<div class="section"><div class="section-head"><h2>Historique</h2></div>`;
     html += hist.length ? `<div class="list">${hist.map((t) => txRow(t, true)).join('')}</div>` : `<div class="card empty-inline">Aucun mouvement pour l’instant.</div>`;
     html += `</div><div class="section"><div class="actions"><button class="btn small" data-action="edit-account" data-id="${esc(a.id)}">Modifier le compte</button></div></div>`;
+    return html;
+  }
+
+  /* ---------- Objectifs ---------- */
+
+  function ring(progress, color) {
+    const r = 26, c = 2 * Math.PI * r, p = Math.max(0, Math.min(1, progress || 0));
+    return `<svg viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="32" r="${r}" fill="none" style="stroke:var(--fill)" stroke-width="7"/>` +
+      (p > 0 ? `<circle cx="32" cy="32" r="${r}" fill="none" style="stroke:${color}" stroke-width="7" stroke-linecap="round" stroke-dasharray="${(c * p).toFixed(2)} ${c.toFixed(2)}" transform="rotate(-90 32 32)"/>` : '') + `</svg>`;
+  }
+
+  function goalLine(p, a) {
+    if (!p) return '';
+    if (p.reached) return 'Objectif atteint, bravo !';
+    if (p.late) return 'Date visée dépassée · il manque ' + fmt(p.remaining);
+    if (p.perMonth !== null) return fmt(p.perMonth) + ' par mois jusqu’en ' + C.monthLabel(C.monthOf(a.targetDate)).toLowerCase();
+    return 'Il manque ' + fmt(p.remaining) + ' · ajoutez une date pour un plan mensuel';
+  }
+
+  function goalCard(a) {
+    const p = C.goalPlan(state, a, today());
+    const color = p.reached ? 'var(--pos)' : p.late ? 'var(--warn)' : 'var(--accent)';
+    let month = '';
+    if (p.perMonth !== null) {
+      month = p.thisMonthLeft > 0
+        ? `<span class="goal-month">Encore ${fmt(p.thisMonthLeft)} à mettre de côté ce mois-ci</span>`
+        : `<span class="goal-month ok">Versement du mois fait</span>`;
+    }
+    return `<a class="card goal" href="#/savings/${esc(a.id)}">
+      <div class="goal-ring">${ring(p.progress, color)}<span>${Math.round((p.progress || 0) * 100)}%</span></div>
+      <div class="goal-main"><span class="name">${esc(a.name)}</span>
+        <span class="amt num">${fmt(p.balance)} <span class="muted">/ ${fmt(p.goal)}</span></span>
+        <span class="small muted">${esc(goalLine(p, a))}</span>${month}</div></a>`;
+  }
+
+  function viewGoals() {
+    const goals = state.savingsAccounts.filter((a) => a.goal);
+    let html = pageHead('Objectifs', { back: '#/more', backLabel: 'Plus', action: 'new-goal', actionLabel: 'Nouvel objectif' });
+    if (!goals.length) {
+      return html + emptyState('target', 'Aucun objectif', 'Fixez un montant et une date (permis, voyage, voiture…) : l’application calcule combien mettre de côté chaque mois.', 'Créer un objectif', 'new-goal');
+    }
+    const total = goals.reduce((x, a) => x + Math.min(a.goal, Math.max(0, C.savingsBalance(state, a.id))), 0);
+    const target = goals.reduce((x, a) => x + a.goal, 0);
+    const monthly = goals.reduce((x, a) => { const p = C.goalPlan(state, a, today()); return x + (p.perMonth || 0); }, 0);
+    html += `<div class="card hero"><div class="label">Progression globale</div><div class="big num">${fmt(total)}</div>
+      ${progressBar(target ? total / target : 0)}<div class="hint">sur ${fmt(target)} visés${monthly ? ' · ' + fmt(monthly) + ' à épargner par mois au total' : ''}</div></div>
+      <div class="section">${goals.map(goalCard).join('')}</div>
+      <p class="small muted" style="margin:4px 4px 0">Un objectif est un compte d’épargne : utilisez « Versement » pour l’alimenter. Le montant mensuel est recalculé automatiquement.</p>`;
+    return html;
+  }
+
+  /* ---------- Budgets par catégorie ---------- */
+
+  function budgetColor(b, cat) {
+    return b.status === 'over' ? 'var(--neg)' : b.status === 'warn' ? 'var(--warn)' : cat.color;
+  }
+
+  function budgetBar(b) {
+    const cat = catById(b.categoryId);
+    const info = b.status === 'over' ? 'Dépassé de ' + fmt(-b.left) : 'Reste ' + fmt(b.left);
+    return `<a class="cat-bar" href="#/budgets"><div class="cat-bar-head"><span class="n"><i class="dot" style="--c:${cat.color}"></i><span>${esc(cat.name)}</span></span>
+      <span class="a">${fmt(b.spent)} <span class="muted" style="font-weight:400">/ ${fmt(b.limit)}</span></span></div>
+      ${progressBar(b.ratio, budgetColor(b, cat))}<div class="delta ${b.status === 'over' ? 'neg' : ''}">${esc(info)}</div></a>`;
+  }
+
+  function viewBudgets() {
+    const ym = thisMonth();
+    const list = C.categoryBudgets(state, ym);
+    const byId = new Map(list.map((b) => [b.categoryId, b]));
+    const spent = new Map(C.expensesByCategory(state, ym).map((c) => [c.categoryId, c.total]));
+    let html = pageHead('Budgets', { back: '#/more', backLabel: 'Plus', eyebrow: C.monthLabel(ym) });
+    if (list.length) {
+      const lim = list.reduce((x, b) => x + b.limit, 0);
+      const sp = list.reduce((x, b) => x + b.spent, 0);
+      const over = list.filter((b) => b.status === 'over').length;
+      html += `<div class="card hero"><div class="label">Dépensé sur vos catégories budgétées</div><div class="big num">${fmt(sp)}</div>
+        ${progressBar(lim ? sp / lim : 0, sp > lim ? 'var(--neg)' : null)}<div class="hint">sur ${fmt(lim)} prévus${over ? ' · ' + over + ' budget' + (over > 1 ? 's' : '') + ' dépassé' + (over > 1 ? 's' : '') : ''}</div></div>`;
+    } else {
+      html += `<div class="note-box">Touchez une catégorie pour lui fixer un montant maximum par mois. Vous serez prévenu à 80 % et en cas de dépassement.</div>`;
+    }
+    html += `<div class="section"><div class="list">` + state.categories.map((c) => {
+      const b = byId.get(c.id);
+      const sub = b ? (b.status === 'over' ? 'Dépassé de ' + fmt(-b.left) : 'Reste ' + fmt(b.left)) : 'Pas de budget · dépensé ' + fmt(spent.get(c.id) || 0);
+      return `<button class="row budget-row" data-action="edit-budget" data-id="${esc(c.id)}">
+        <span class="avatar" style="--c:${c.color}">${esc(c.name.charAt(0))}</span>
+        <span class="row-main"><span class="row-title">${esc(c.name)}</span><span class="row-sub ${b && b.status === 'over' ? 'neg' : ''}">${esc(sub)}</span>
+        ${b ? progressBar(b.ratio, budgetColor(b, c)) : ''}</span>
+        <span class="row-amount">${b ? fmt(b.limit) : '<span class="muted" style="font-weight:400">—</span>'}</span></button>`;
+    }).join('') + `</div></div>`;
+    return html;
+  }
+
+  function openBudgetForm(id) {
+    const c = catById(id);
+    const cur = (state.budgets || {})[c.id];
+    const sp = (C.expensesByCategory(state, thisMonth()).find((x) => x.categoryId === c.id) || {}).total || 0;
+    openSheet('Budget · ' + c.name, `<form class="form" id="budget-form" data-id="${esc(c.id)}" novalidate>
+      <p class="muted small" style="margin:0;text-align:center">Montant maximum par mois · déjà dépensé ce mois-ci : ${fmt(sp)}</p>
+      ${amountField('limit', cur ? C.centsToInput(cur) : '')}
+      <div class="form-error"></div>
+      <button class="btn primary" type="submit">Enregistrer</button>
+      ${cur ? '<button type="button" class="btn danger" data-action="delete-budget" data-id="' + esc(c.id) + '">Retirer ce budget</button>' : ''}
+    </form>`, { focus: 'input[name="limit"]' });
+  }
+
+  function submitBudget(form) {
+    const id = form.dataset.id;
+    const v = C.parseAmount(String(new FormData(form).get('limit') || ''));
+    if (!v) return fieldErr(form, 'Saisissez un montant valide, par exemple 150.');
+    commit((s) => { s.budgets[id] = v; }, 'Budget enregistré');
+    closeSheet();
+  }
+
+  /** Message d'alerte si une dépense fait franchir 80 % ou 100 % d'un budget. */
+  function budgetAlerts(before, after) {
+    const prev = new Map(before.map((b) => [b.categoryId, b.status]));
+    const msgs = [];
+    for (const b of after) {
+      const was = prev.get(b.categoryId) || 'ok';
+      const name = catById(b.categoryId).name;
+      if (b.status === 'over' && was !== 'over') msgs.push('Budget ' + name + ' dépassé de ' + fmt(-b.left));
+      else if (b.status === 'warn' && was === 'ok') msgs.push('Budget ' + name + ' : ' + Math.round(b.ratio * 100) + ' % utilisé');
+    }
+    return msgs;
+  }
+
+  /* ---------- Paiements Apple Pay ---------- */
+
+  let walletDraft = null;
+
+  function pickWalletFile() {
+    let input = document.getElementById('wallet-input');
+    if (!input) {
+      input = document.createElement('input');
+      input.type = 'file';
+      input.id = 'wallet-input';
+      input.accept = '.txt,.csv,text/plain';
+      input.hidden = true;
+      document.body.appendChild(input);
+      input.addEventListener('change', () => { if (input.files && input.files[0]) readWalletFile(input.files[0]); });
+    }
+    input.value = '';
+    input.click();
+  }
+
+  async function readWalletFile(file) {
+    let text;
+    try { text = await file.text(); } catch (e) { toast('Impossible de lire ce fichier.'); return; }
+    const prep = C.prepareWalletImport(state, text);
+    if (!prep.items.length) {
+      toast(prep.alreadyImported ? 'Aucun nouveau paiement : les ' + prep.alreadyImported + ' paiements du fichier sont déjà importés.' : 'Aucun paiement lisible dans ce fichier.');
+      return;
+    }
+    walletDraft = prep;
+    openSheet('Paiements Apple Pay', walletReviewHTML());
+  }
+
+  function walletReviewHTML() {
+    const d = walletDraft;
+    return `<form class="form" id="wallet-form" novalidate>
+      <p class="muted small" style="margin:0">${d.items.length} nouveau${d.items.length > 1 ? 'x' : ''} paiement${d.items.length > 1 ? 's' : ''}${d.alreadyImported ? ' · ' + d.alreadyImported + ' déjà importé' + (d.alreadyImported > 1 ? 's' : '') : ''}${d.invalid ? ' · ' + d.invalid + ' ligne' + (d.invalid > 1 ? 's' : '') + ' illisible' + (d.invalid > 1 ? 's' : '') : ''}. Vérifiez les catégories, puis ajoutez.</p>
+      <div class="list plain">${d.items.map((it, i) => `<div class="wallet-item">
+        <label class="check"><input type="checkbox" name="sel" value="${i}" ${it.selected ? 'checked' : ''}><span></span></label>
+        <div class="row-main"><span class="row-title">${esc(it.merchant)}</span>
+          <span class="row-sub">${esc(C.dateLabel(it.date))}${it.possibleDuplicate ? ' <span class="badge warn">déjà saisi ?</span>' : ''}${it.subscriptionId ? ' <span class="badge">abonnement</span>' : ''}</span>
+          <select class="input input-sm" name="cat-${i}" aria-label="Catégorie">${opt(state.categories, it.categoryId)}</select></div>
+        <span class="row-amount">−${fmt(it.amount)}</span></div>`).join('')}</div>
+      <div class="form-error"></div>
+      <button class="btn primary" type="submit">Ajouter les paiements cochés</button>
+      <p class="small muted" style="margin:0;text-align:center">Les paiements décochés ne seront plus proposés. Quand vous changez une catégorie, l’application s’en souvient pour ce commerçant.</p>
+    </form>`;
+  }
+
+  function submitWallet(form) {
+    const d = walletDraft;
+    if (!d) return;
+    const fd = new FormData(form);
+    const selected = new Set(fd.getAll('sel').map(Number));
+    const ym = thisMonth();
+    const before = C.categoryBudgets(state, ym);
+    let added = 0;
+    commit((s) => {
+      d.items.forEach((it, i) => {
+        s.importedKeys[it.key] = true;
+        if (!selected.has(i)) return;
+        const categoryId = catById(String(fd.get('cat-' + i))) ? String(fd.get('cat-' + i)) : 'autres';
+        // La catégorie choisie diffère de la suggestion : on la retient pour ce commerçant.
+        if (categoryId !== C.categorizeMerchant(s, it.merchant)) s.merchantRules[C.normMerchant(it.merchant)] = categoryId;
+        const tx = { id: C.uid(), type: 'expense', amount: it.amount, date: it.date, note: '', merchant: it.merchant, imported: true, categoryId, payment: 'applepay', createdAt: Date.now() + i };
+        if (it.subscriptionId) {
+          const sub = s.subscriptions.find((x) => x.id === it.subscriptionId);
+          if (sub) { tx.subscriptionId = sub.id; sub.nextDate = C.addPeriod(sub.nextDate, sub.frequency, sub.anchorDay); }
+        }
+        s.transactions.push(tx);
+        added++;
+      });
+      s.settings.lastWalletImport = new Date().toISOString();
+    });
+    walletDraft = null;
+    closeSheet();
+    const alerts = budgetAlerts(before, C.categoryBudgets(state, ym));
+    toast(added + ' paiement' + (added > 1 ? 's' : '') + ' ajouté' + (added > 1 ? 's' : '') + (alerts.length ? ' · ' + alerts[0] : ''));
+  }
+
+  function viewApplePay() {
+    const rules = Object.entries(state.merchantRules || {});
+    let html = pageHead('Apple Pay', { back: '#/more', backLabel: 'Plus' });
+    html += `<div class="card hero"><div class="label">Import des paiements</div>
+      <p style="margin:6px 0 14px;font-size:15px">À chaque paiement Apple Pay, un raccourci iPhone note le montant et le commerçant. Ici, vous importez ces paiements : ils sont classés automatiquement par catégorie.</p>
+      <button class="btn primary" data-action="wallet-import">${icon('upload')}Importer le fichier des paiements</button>
+      <div class="hint">${state.settings.lastWalletImport ? 'Dernier import : ' + esc(prettyDay(state.settings.lastWalletImport.slice(0, 10)).toLowerCase()) : 'Aucun import pour l’instant.'} Le même fichier peut être réimporté : seuls les nouveaux paiements sont ajoutés.</div></div>`;
+    html += `<div class="section"><div class="section-head"><h2>Configuration (une seule fois)</h2></div>
+      <details class="guide" ${state.settings.lastWalletImport ? '' : 'open'}><summary>Créer le raccourci iPhone</summary><ol>
+        <li>Ouvrez l’app <strong>Raccourcis</strong>, onglet <strong>Automatisation</strong>, puis <strong>+</strong> (Nouvelle automatisation).</li>
+        <li>Choisissez <strong>Transaction</strong>. Sélectionnez votre carte, laissez toutes les catégories et tous les commerçants, et cochez <strong>Exécuter immédiatement</strong>. Touchez <strong>Suivant</strong> puis <strong>Nouveau raccourci vierge</strong>.</li>
+        <li>Ajoutez l’action <strong>Formater la date</strong> : date = <strong>Date actuelle</strong>, format de date = <strong>Personnalisé</strong>, chaîne de format = <code>yyyy-MM-dd</code>.</li>
+        <li>Ajoutez l’action <strong>Texte</strong> et composez exactement : <code>Date formatée;Montant;Commerçant</code><br>Pour « Montant » et « Commerçant », insérez la variable <strong>Entrée du raccourci</strong>, touchez-la et choisissez la propriété voulue. Séparez par un point-virgule, sans espace.</li>
+        <li>Ajoutez l’action <strong>Ajouter au fichier texte</strong> : texte = <strong>Texte</strong>, fichier = <code>Budget/paiements.txt</code>, et activez <strong>Créer une nouvelle ligne</strong>.</li>
+        <li>Touchez <strong>OK</strong>. Le fichier sera créé dans <strong>iCloud Drive › Raccourcis › Budget</strong> au premier paiement.</li>
+      </ol></details>
+      <details class="guide"><summary>Importer les paiements</summary><ol>
+        <li>Touchez <strong>Importer le fichier des paiements</strong> ci-dessus.</li>
+        <li>Ouvrez <strong>iCloud Drive › Raccourcis › Budget</strong> et choisissez <strong>paiements.txt</strong>.</li>
+        <li>Vérifiez les catégories et touchez <strong>Ajouter</strong>.</li>
+      </ol><p>Limites : seuls les paiements Apple Pay (iPhone ou montre) sont détectés, et le montant affiché par Cartes peut différer du montant final (station-service, hôtel…). Vous pouvez toujours corriger une opération.</p></details>
+    </div>`;
+    html += `<div class="section"><div class="section-head"><h2>Commerçants mémorisés</h2></div>`;
+    html += rules.length ? `<div class="list plain">${rules.map(([k, v]) => `<div class="row"><span class="row-main"><span class="row-title">${esc(k)}</span><span class="row-sub">→ ${esc(catById(v).name)}</span></span><button class="link small" data-action="delete-rule" data-key="${esc(k)}">Oublier</button></div>`).join('')}</div>`
+      : `<div class="card empty-inline">Quand vous corrigez la catégorie d’un commerçant, elle est retenue ici pour les prochains imports.</div>`;
+    html += `</div>`;
     return html;
   }
 
@@ -751,14 +1009,14 @@
     </div>`;
 
     html += `<div class="section"><div class="actions"><button class="btn danger" data-action="reset-all">Effacer toutes les données</button></div></div>
-      <p class="footer-note">Budget · version 1.0</p>`;
+      <p class="footer-note">Budget · version 1.1</p>`;
     return html;
   }
 
   /* ---------- Rendu ---------- */
 
-  const VIEWS = { home: viewHome, ops: viewOps, stats: viewStats, more: viewMore, savings: viewSavings, credits: viewCredits, subs: viewSubs, incomes: viewIncomes, categories: viewCategories, settings: viewSettings };
-  const TAB_OF = { home: 'home', ops: 'ops', stats: 'stats', more: 'more', savings: 'more', credits: 'more', subs: 'more', incomes: 'more', categories: 'more', settings: 'more' };
+  const VIEWS = { home: viewHome, ops: viewOps, stats: viewStats, more: viewMore, savings: viewSavings, credits: viewCredits, subs: viewSubs, incomes: viewIncomes, categories: viewCategories, settings: viewSettings, goals: viewGoals, budgets: viewBudgets, applepay: viewApplePay };
+  const TAB_OF = { home: 'home', ops: 'ops', stats: 'stats', more: 'more', savings: 'more', credits: 'more', subs: 'more', incomes: 'more', categories: 'more', settings: 'more', goals: 'more', budgets: 'more', applepay: 'more' };
 
   function route() {
     const parts = location.hash.replace(/^#\/?/, '').split('/');
@@ -880,6 +1138,8 @@
         }
       }
       if (d.subscriptionId) tx.subscriptionId = d.subscriptionId;
+      if (d.merchant) tx.merchant = d.merchant;
+      if (d.imported) tx.imported = true;
     } else if (d.type === 'income') {
       tx.source = d.source || 'autres';
       if (d.recurringId) tx.recurringId = d.recurringId;
@@ -902,7 +1162,13 @@
     submitting = true;
     const isEdit = !!d.id;
     const advanceSub = !isEdit && d.subscriptionId;
+    const budgetMonth = C.monthOf(tx.date);
+    const budgetsBefore = C.categoryBudgets(state, budgetMonth);
+    const original = isEdit ? state.transactions.find((x) => x.id === tx.id) : null;
     commit((s) => {
+      if (isEdit && original && original.merchant && tx.type === 'expense' && original.categoryId !== tx.categoryId) {
+        s.merchantRules[C.normMerchant(original.merchant)] = tx.categoryId;
+      }
       if (isEdit) {
         const i = s.transactions.findIndex((x) => x.id === tx.id);
         if (i > -1) s.transactions[i] = tx; else s.transactions.push(tx);
@@ -913,23 +1179,26 @@
           if (sub) sub.nextDate = C.addPeriod(sub.nextDate, sub.frequency, sub.anchorDay);
         }
       }
-    }, isEdit ? 'Opération modifiée' : 'Opération ajoutée');
+    });
+    const alerts = budgetMonth === thisMonth() ? budgetAlerts(budgetsBefore, C.categoryBudgets(state, budgetMonth)) : [];
+    toast((isEdit ? 'Opération modifiée' : 'Opération ajoutée') + (alerts.length ? ' · ' + alerts[0] : ''));
     closeSheet();
     setTimeout(() => { submitting = false; }, 400);
   }
 
   /* ---------- Compte d'épargne ---------- */
 
-  function openAccountForm(id) {
+  function openAccountForm(id, preset) {
     const a = id ? accById(id) : null;
     const bal = a ? C.savingsBalance(state, a.id) : null;
     const hasLivretA = state.savingsAccounts.some((x) => x.kind === 'livretA');
-    const kind = a ? a.kind : hasLivretA ? 'perso' : 'livretA';
+    const kind = a ? a.kind : preset && preset.kind ? preset.kind : hasLivretA ? 'perso' : 'livretA';
     openSheet(a ? 'Modifier le compte' : 'Nouveau compte', `<form class="form" id="account-form" data-id="${a ? esc(a.id) : ''}" novalidate>
       <label class="field"><span>Type</span><select class="input" name="kind">${opt(C.SAVINGS_KINDS, kind)}</select></label>
       <label class="field"><span>Nom</span><input class="input" name="name" maxlength="60" value="${esc(a ? a.name : kindName(kind))}" autocomplete="off"></label>
       <label class="field"><span>Solde actuel</span>${moneyInput('balance', a ? C.centsToInput(bal) : '')}${a ? '<div class="help">Modifier ce montant ajuste le solde sans créer d’opération.</div>' : ''}</label>
-      <label class="field"><span>Objectif d’épargne (facultatif)</span>${moneyInput('goal', a && a.goal ? C.centsToInput(a.goal) : '', 'Ex. 5 000')}</label>
+      <label class="field"><span>Objectif d’épargne${kind === 'projet' ? '' : ' (facultatif)'}</span>${moneyInput('goal', a && a.goal ? C.centsToInput(a.goal) : '', 'Ex. 5 000')}</label>
+      <label class="field"><span>Date visée (facultatif)</span><input class="input" type="date" name="targetDate" value="${a && a.targetDate ? a.targetDate : ''}"><div class="help">Avec une date, l’application calcule combien mettre de côté chaque mois.</div></label>
       <div class="form-error"></div>
       <button class="btn primary" type="submit">${a ? 'Enregistrer' : 'Créer le compte'}</button>
       ${a ? '<button type="button" class="btn danger" data-action="delete-account" data-id="' + esc(a.id) + '">Supprimer le compte</button>' : ''}
@@ -948,15 +1217,19 @@
     if (balance === null) return fieldErr(form, 'Solde invalide.');
     if (goalStr && !goal) return fieldErr(form, 'Objectif invalide.');
     const kind = String(fd.get('kind'));
+    const targetDate = String(fd.get('targetDate') || '');
+    if (targetDate && !C.isValidISODate(targetDate)) return fieldErr(form, 'Date visée invalide.');
+    if (targetDate && !goal) return fieldErr(form, 'Indiquez le montant de l’objectif pour cette date.');
+    if (kind === 'projet' && !goal) return fieldErr(form, 'Indiquez le montant de votre objectif.');
     if (id) {
       commit((s) => {
         const a = s.savingsAccounts.find((x) => x.id === id);
-        a.name = name; a.kind = kind; a.goal = goal || null;
+        a.name = name; a.kind = kind; a.goal = goal || null; a.targetDate = targetDate || null;
         a.initialBalance = balance - C.savingsMovementNet(s, id);
       }, 'Compte modifié');
     } else {
       const newId = C.uid();
-      commit((s) => { s.savingsAccounts.push({ id: newId, name, kind, initialBalance: balance, goal: goal || null }); }, 'Compte créé');
+      commit((s) => { s.savingsAccounts.push({ id: newId, name, kind, initialBalance: balance, goal: goal || null, targetDate: targetDate || null }); }, 'Compte créé');
       // Si le compte a été créé depuis le formulaire d'opération, on y revient directement.
       if (pendingSavingForm) {
         pendingSavingForm = false;
@@ -1331,9 +1604,16 @@
         s.categories = s.categories.filter((c) => c.id !== id);
         s.transactions.forEach((t) => { if (t.categoryId === id) t.categoryId = 'autres'; });
         s.subscriptions.forEach((x) => { if (x.categoryId === id) x.categoryId = 'abonnements'; });
+        delete s.budgets[id];
+        for (const k of Object.keys(s.merchantRules)) if (s.merchantRules[k] === id) delete s.merchantRules[k];
       }, 'Catégorie supprimée');
     },
 
+    'new-goal': () => { pendingSavingForm = false; openAccountForm(null, { kind: 'projet' }); },
+    'edit-budget': (el) => openBudgetForm(el.dataset.id),
+    'delete-budget': (el) => { const id = el.dataset.id; closeSheet(); commitUndoable((s) => { delete s.budgets[id]; }, 'Budget retiré'); },
+    'wallet-import': () => pickWalletFile(),
+    'delete-rule': (el) => { const k = el.dataset.key; commitUndoable((s) => { delete s.merchantRules[k]; }, 'Commerçant oublié'); },
     'theme': (el) => { commit((s) => { s.settings.theme = el.dataset.value; }); applyTheme(); },
     'adjust-balance': () => openBalanceForm(),
     'export-json': () => exportJSON(),
@@ -1366,7 +1646,8 @@
 
   const FORMS = {
     'tx-form': submitTx, 'account-form': submitAccount, 'credit-form': submitCredit, 'sub-form': submitSub,
-    'income-form': submitIncome, 'category-form': submitCategory, 'balance-form': submitBalance, 'onboard-form': submitOnboarding
+    'income-form': submitIncome, 'category-form': submitCategory, 'balance-form': submitBalance, 'onboard-form': submitOnboarding,
+    'budget-form': submitBudget, 'wallet-form': submitWallet
   };
 
   function bindEvents() {
